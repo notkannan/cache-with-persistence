@@ -1,6 +1,6 @@
 {
   "name": "@notkannan/cache-with-persistence",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publishConfig": {
     "access": "public"
   },
@@ -19,12 +19,23 @@
     "url": "https://github.com/notkannan/cache-with-persistence.git"
   },
   "author": "Kannan Karthikeyan",
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["redis", "in-memory", "key-value", "store", "wal", "persistence"],
+  "keywords": [
+    "redis",
+    "in-memory",
+    "key-value",
+    "store",
+    "wal",
+    "persistence"
+  ],
   "license": "ISC",
   "engines": {
     "node": ">=18"
