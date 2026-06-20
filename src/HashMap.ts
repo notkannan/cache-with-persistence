@@ -10,7 +10,7 @@ export class HashMap<V> {
     private size: number; // how many key/value pairs are stored
     private capacity: number; // number of buckets in the HashMap
 
-    constructor(capacity = 16) {
+    constructor(capacity = 8192) {
         this.capacity = capacity;
         this.size = 0;
         this.buckets = new Array(capacity).fill(null);
@@ -18,7 +18,11 @@ export class HashMap<V> {
 
     // Hash function
     private hash(key: string): number {
-        return 1
+        let hash = 5381;
+        for (let i = 0; i < key.length; i++) {
+            hash = ((hash << 5) + hash + key.charCodeAt(i)) | 0;
+        }
+        return (hash >>> 0) % this.capacity;
     }
 
     // Set function
