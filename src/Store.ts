@@ -1,93 +1,134 @@
-import * as fs from 'fs';
-import { HashMap } from './HashMap.js'
-import { WAL, type WALEntry } from './WAL.js'
+// src/Store.ts
+import { HashMap } from './HashMap.js';
+import { WAL, type WALEntry } from './WAL.js';
 
 interface StoreEntry {
   value: string;
-  expiresAt: number | null;  // Unix ms timestamp, or null if no expiry
+  expiresAt: number | null;
 }
 
+export interface StoreOptions {
+  dataDir?: string;
+  syncOnWrite?: boolean; // pass through to WAL
+}
+
+type StoreState = 'open' | 'closing' | 'closed';
+
 export class Store {
-  private map: HashMap<StoreEntry>;
+  private map = new HashMap<StoreEntry>();
   private wal: WAL;
+  private state: StoreState = 'open';
+  private writeChain: Promise<void> = Promise.resolve();
 
-  constructor(dataDir: string ='./data') {
-    this.map = new HashMap<StoreEntry>();
-    this.wal = new WAL(dataDir);
-
-
-    this.recover();
+  /** Private — use Store.open() */
+  private constructor(wal: WAL) {
+    this.wal = wal;
   }
 
-  private recover(): void {
-    const entries = this.wal.readAll();
-    if (entries.length === 0) return; // clean WAL file
+  /** Create store and replay WAL (async startup) */
+  static async open(options: StoreOptions = {}): Promise<Store> {
+    const dataDir = options.dataDir ?? './data';
+    const wal = await WAL.open(dataDir, { ...(options.syncOnWrite !== undefined && { syncOnWrite: options.syncOnWrite }) });
+    const store = new Store(wal);
+    await store.recover();
+    return store;
+  }
 
-    for(const entry of entries) {
+  private async recover(): Promise<void> {
+    const entries = await this.wal.readAll();
+    for (const entry of entries) {
       if (entry.op === 'SET') {
-        const expiresAt = entry.ttlSeconds 
-          ? entry.timestamp + entry.ttlSeconds * 1000 
+        const expiresAt = entry.ttlSeconds
+          ? entry.timestamp + entry.ttlSeconds * 1000
           : null;
-      
-      if (expiresAt !== null && Date.now() > expiresAt) continue;
-      
-      this.map.set(entry.key, { value: entry.value!, expiresAt });
-
+        if (expiresAt !== null && Date.now() > expiresAt) continue;
+        this.map.set(entry.key, { value: entry.value!, expiresAt });
       } else if (entry.op === 'DEL') {
         this.map.delete(entry.key);
       }
     }
   }
 
-  // SET key value [EX seconds]
-  set(key: string, value: string, ttlSeconds?: number): void {
-    
-    this.wal.append({ 
-      op: 'SET', 
-      key, 
-      value, 
-      timestamp: Date.now(),
-      ...(ttlSeconds !== undefined && { ttlSeconds })
-    });
-
-    const expiresAt = ttlSeconds
-      ? Date.now() + ttlSeconds * 1000
-      : null;
-
-    this.map.set(key, { value, expiresAt });
+  private assertOpen(): void {
+    if (this.state !== 'open') {
+      throw new Error(`Store is ${this.state}`);
+    }
   }
 
-  // GET key → returns the value, or null if missing/expired
+  private enqueueWrite(task: () => Promise<void>): Promise<void> {
+    this.assertOpen();
+    const next = this.writeChain.then(task);
+    // Keep chain alive even if one write fails
+    this.writeChain = next.catch(() => {});
+    return next;
+  }
+
+  async set(key: string, value: string, ttlSeconds?: number): Promise<void> {
+    const entry: WALEntry = {
+      op: 'SET',
+      key,
+      value,
+      timestamp: Date.now(),
+      ...(ttlSeconds !== undefined && { ttlSeconds }),
+    };
+
+    await this.enqueueWrite(async () => {
+      await this.wal.append(entry); // durable first
+
+      const expiresAt = ttlSeconds
+        ? Date.now() + ttlSeconds * 1000
+        : null;
+      this.map.set(key, { value, expiresAt });
+    });
+  }
+
+  /** Reads stay sync — memory only */
   get(key: string): string | null {
     const entry = this.map.get(key);
     if (!entry) return null;
-
-    // Lazy expiry — we check on read, not on a background timer
     if (entry.expiresAt !== null && Date.now() > entry.expiresAt) {
-      this.map.delete(key); // clean up expired key
+      this.map.delete(key);
       return null;
     }
-
     return entry.value;
   }
 
-  // DEL key → returns true if deleted, false if key didn't exist
-  del(key: string): boolean {
-    this.wal.append({ op: 'DEL', key, timestamp: Date.now() });
-    return this.map.delete(key);
+  async del(key: string): Promise<boolean> {
+    let deleted = false;
+
+    await this.enqueueWrite(async () => {
+      await this.wal.append({ op: 'DEL', key, timestamp: Date.now() });
+      deleted = this.map.delete(key);
+    });
+
+    return deleted;
   }
 
-  // EXISTS key
   exists(key: string): boolean {
-    return this.get(key) !== null; // reuses expiry logic from get()
+    return this.get(key) !== null;
   }
 
-  // TTL key → remaining milliseconds, -1 if no expiry, -2 if not found
   ttl(key: string): number {
     const entry = this.map.get(key);
     if (!entry) return -2;
     if (entry.expiresAt === null) return -1;
     const remaining = entry.expiresAt - Date.now();
     return remaining > 0 ? remaining : -2;
+  }
+
+  /** Wait for all pending writes, then fsync */
+  async flush(): Promise<void> {
+    await this.writeChain;
+    await this.wal.flush();
+  }
+
+  /** Drain writes, fsync, close file handle */
+  async close(): Promise<void> {
+    if (this.state === 'closed') return;
+
+    this.state = 'closing';
+    await this.writeChain;  // wait for in-flight set/del
+    await this.wal.close();
+    this.state = 'closed';
   }
 }

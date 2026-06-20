@@ -5,12 +5,15 @@ interface Entry<V> {
     next: Entry<V> | null; // pointer to the next entry in the chain (in case of collision)
 }
 
+// HashMap class - core Key:Value logic
 export class HashMap<V> {
-    private buckets: Array<Entry<V> | null>;
+
+    private buckets: Array<Entry<V> | null>; // actual array that stores entries of type V
     private size: number; // how many key/value pairs are stored
     private capacity: number; // number of buckets in the HashMap
 
     constructor(capacity = 8192) {
+
         this.capacity = capacity;
         this.size = 0;
         this.buckets = new Array(capacity).fill(null);
@@ -28,9 +31,10 @@ export class HashMap<V> {
     // Set function
     set(key: string, value: V): void {
 
-        const index = this.hash(key); // get the index by hashing to the bucket array
-        let entry = this.buckets[index] ?? null;
+        const index = this.hash(key); // obtain index
+        let entry = this.buckets[index] ?? null; // index might be empty
 
+        // iterate the chain if idx not empty
         while (entry !== null) {
             if (entry.key === key) {
                 entry.value = value;
@@ -44,9 +48,10 @@ export class HashMap<V> {
         const newEntry: Entry<V> = {
             key,
             value,
-            next: this.buckets[index] ?? null,         // new entry points to the old head
+            next: this.buckets[index] ?? null,
         };
-        this.buckets[index] = newEntry;      // new entry becomes the new head
+
+        this.buckets[index] = newEntry;
         this.size++;
     }
 
