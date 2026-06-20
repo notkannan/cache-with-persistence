@@ -1,0 +1,6 @@
+src/
+test-data/
+data/
+*.test.ts
+*.test.js
+tsconfig.json
